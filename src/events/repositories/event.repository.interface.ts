@@ -4,6 +4,8 @@ export const EVENT_REPOSITORY = Symbol('EVENT_REPOSITORY');
 
 export interface EventRepository {
   create(event: Event): Promise<Event>;
+  delete(id: string): Promise<void>;
   findAll(): Promise<Event[]>;
   findById(id: string): Promise<Event | null>;
+  update(event: Event): Promise<Event>;
 }

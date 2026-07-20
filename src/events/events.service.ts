@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -8,6 +9,7 @@ import { randomUUID } from 'crypto';
 import { CreateEventDto } from './dto/create-event.dto';
 import { toEventResponse } from './dto/event-response.dto';
 import type { EventResponseDto } from './dto/event-response.dto';
+import type { UpdateEventDto } from './dto/update-event.dto';
 import type { Event } from './domain/event';
 import { EVENT_REPOSITORY } from './repositories/event.repository.interface';
 import type { EventRepository } from './repositories/event.repository.interface';
@@ -46,6 +48,55 @@ export class EventsService {
   }
 
   async findById(id: string): Promise<EventResponseDto> {
+    const event = await this.getEventOrThrow(id);
+
+    return toEventResponse(event);
+  }
+
+  async updateEvent(
+    id: string,
+    updateEventDto: UpdateEventDto,
+    organizerId: string,
+  ): Promise<EventResponseDto> {
+    const hasEditableField = [
+      updateEventDto.title,
+      updateEventDto.description,
+      updateEventDto.scheduledAt,
+    ].some((value) => value !== undefined);
+
+    if (!hasEditableField) {
+      throw new BadRequestException({
+        code: 'EVENT_UPDATE_EMPTY',
+        message: 'At least one editable event field must be provided',
+      });
+    }
+
+    const event = await this.getEventOrThrow(id);
+
+    this.assertEventOwner(event, organizerId);
+
+    const updatedEvent: Event = {
+      ...event,
+      title: updateEventDto.title?.trim() ?? event.title,
+      description: updateEventDto.description?.trim() ?? event.description,
+      scheduledAt: updateEventDto.scheduledAt
+        ? this.parseFutureScheduledAt(updateEventDto.scheduledAt)
+        : event.scheduledAt,
+      updatedAt: new Date(),
+    };
+
+    return toEventResponse(await this.eventRepository.update(updatedEvent));
+  }
+
+  async deleteEvent(id: string, organizerId: string): Promise<void> {
+    const event = await this.getEventOrThrow(id);
+
+    this.assertEventOwner(event, organizerId);
+
+    await this.eventRepository.delete(id);
+  }
+
+  private async getEventOrThrow(id: string): Promise<Event> {
     const event = await this.eventRepository.findById(id);
 
     if (!event) {
@@ -55,7 +106,16 @@ export class EventsService {
       });
     }
 
-    return toEventResponse(event);
+    return event;
+  }
+
+  private assertEventOwner(event: Event, organizerId: string): void {
+    if (event.organizerId !== organizerId) {
+      throw new ForbiddenException({
+        code: 'EVENT_OWNER_REQUIRED',
+        message: 'Only the event organizer can modify this event',
+      });
+    }
   }
 
   private parseFutureScheduledAt(scheduledAtInput: string): Date {

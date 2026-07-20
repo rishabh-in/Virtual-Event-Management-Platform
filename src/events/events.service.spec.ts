@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { Event } from './domain/event';
 import type { CreateEventDto } from './dto/create-event.dto';
 import type { EventRepository } from './repositories/event.repository.interface';
@@ -28,10 +32,20 @@ describe('EventsService', () => {
         events.push(event);
         return Promise.resolve(cloneEvent(event));
       }),
+      delete: jest.fn((id: string) => {
+        events = events.filter((event) => event.id !== id);
+        return Promise.resolve();
+      }),
       findAll: jest.fn(() => Promise.resolve(events.map(cloneEvent))),
       findById: jest.fn((id: string) =>
         Promise.resolve(events.find((event) => event.id === id) ?? null),
       ),
+      update: jest.fn((event: Event) => {
+        events = events.map((storedEvent) =>
+          storedEvent.id === event.id ? event : storedEvent,
+        );
+        return Promise.resolve(cloneEvent(event));
+      }),
     };
 
     service = new EventsService(repository);
@@ -89,6 +103,84 @@ describe('EventsService', () => {
     await expect(
       service.findById('dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('updates an event owned by the authenticated organizer', async () => {
+    const created = await service.createEvent(createDto(), 'organizer-id');
+    const updatedSchedule = new Date(Date.now() + 2 * 60 * 60 * 1000);
+
+    const response = await service.updateEvent(
+      created.id,
+      {
+        title: '  Updated title  ',
+        scheduledAt: updatedSchedule.toISOString(),
+      },
+      'organizer-id',
+    );
+
+    expect(response).toMatchObject({
+      id: created.id,
+      title: 'Updated title',
+      description: created.description,
+      scheduledAt: updatedSchedule.toISOString(),
+      organizerId: 'organizer-id',
+    });
+    expect(Date.parse(response.updatedAt)).toBeGreaterThanOrEqual(
+      Date.parse(created.updatedAt),
+    );
+  });
+
+  it('rejects empty event updates', async () => {
+    const created = await service.createEvent(createDto(), 'organizer-id');
+
+    await expect(
+      service.updateEvent(created.id, {}, 'organizer-id'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects event updates from a non-owner organizer', async () => {
+    const created = await service.createEvent(createDto(), 'organizer-id');
+
+    await expect(
+      service.updateEvent(
+        created.id,
+        {
+          title: 'Blocked update',
+        },
+        'other-organizer-id',
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('throws not found when updating a missing event', async () => {
+    await expect(
+      service.updateEvent(
+        'dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9',
+        {
+          title: 'Missing',
+        },
+        'organizer-id',
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('deletes an event owned by the authenticated organizer', async () => {
+    const created = await service.createEvent(createDto(), 'organizer-id');
+
+    await service.deleteEvent(created.id, 'organizer-id');
+
+    await expect(service.findById(created.id)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(repository.delete.mock.calls).toContainEqual([created.id]);
+  });
+
+  it('rejects event deletion from a non-owner organizer', async () => {
+    const created = await service.createEvent(createDto(), 'organizer-id');
+
+    await expect(
+      service.deleteEvent(created.id, 'other-organizer-id'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
 

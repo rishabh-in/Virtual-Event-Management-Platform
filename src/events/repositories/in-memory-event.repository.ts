@@ -14,6 +14,12 @@ export class InMemoryEventRepository implements EventRepository {
     return Promise.resolve(this.cloneEvent(storedEvent));
   }
 
+  delete(id: string): Promise<void> {
+    this.eventsById.delete(id);
+
+    return Promise.resolve();
+  }
+
   findAll(): Promise<Event[]> {
     return Promise.resolve(
       Array.from(this.eventsById.values()).map((event) =>
@@ -26,6 +32,14 @@ export class InMemoryEventRepository implements EventRepository {
     const event = this.eventsById.get(id);
 
     return Promise.resolve(event ? this.cloneEvent(event) : null);
+  }
+
+  update(event: Event): Promise<Event> {
+    const storedEvent = this.cloneEvent(event);
+
+    this.eventsById.set(storedEvent.id, storedEvent);
+
+    return Promise.resolve(this.cloneEvent(storedEvent));
   }
 
   clear(): void {

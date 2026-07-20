@@ -677,6 +677,264 @@ describe('AppController (e2e)', () => {
         ]),
       );
     });
+
+    it('allows the event owner to update editable fields', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Update Organizer',
+        email: 'update-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(organizerToken);
+      const updatedSchedule = futureIsoDate(2);
+
+      const response = await request(app.getHttpServer())
+        .put(`/events/${createdEvent.id}`)
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({
+          title: 'Updated Event',
+          scheduledAt: updatedSchedule,
+        })
+        .expect(200);
+
+      const body = response.body as EventResponseBody;
+
+      expect(body).toMatchObject({
+        id: createdEvent.id,
+        title: 'Updated Event',
+        description: createdEvent.description,
+        scheduledAt: updatedSchedule,
+        organizerId: createdEvent.organizerId,
+        participantCount: 0,
+        createdAt: createdEvent.createdAt,
+      });
+      expect(Date.parse(body.updatedAt)).toBeGreaterThanOrEqual(
+        Date.parse(createdEvent.updatedAt),
+      );
+      expect(body).not.toHaveProperty('participantIds');
+    });
+
+    it('rejects event updates from a non-owner organizer', async () => {
+      const ownerToken = await registerAndLogin({
+        name: 'Owner Organizer',
+        email: 'owner-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const otherOrganizerToken = await registerAndLogin({
+        name: 'Other Organizer',
+        email: 'other-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(ownerToken);
+
+      const response = await request(app.getHttpServer())
+        .put(`/events/${createdEvent.id}`)
+        .set('Authorization', `Bearer ${otherOrganizerToken}`)
+        .send({
+          title: 'Unauthorized Update',
+        })
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'EVENT_OWNER_REQUIRED',
+        message: 'Only the event organizer can modify this event',
+        path: `/events/${createdEvent.id}`,
+      });
+    });
+
+    it('rejects attendee event updates', async () => {
+      const ownerToken = await registerAndLogin({
+        name: 'Role Owner',
+        email: 'role-owner@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeToken = await registerAndLogin({
+        name: 'Update Attendee',
+        email: 'update-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(ownerToken);
+
+      const response = await request(app.getHttpServer())
+        .put(`/events/${createdEvent.id}`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .send({
+          title: 'Attendee Update',
+        })
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'FORBIDDEN_ROLE',
+        path: `/events/${createdEvent.id}`,
+      });
+    });
+
+    it('returns 404 when updating a missing event', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Missing Update Organizer',
+        email: 'missing-update-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+
+      const response = await request(app.getHttpServer())
+        .put('/events/dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9')
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({
+          title: 'Missing update',
+        })
+        .expect(404);
+
+      expect(response.body).toMatchObject({
+        statusCode: 404,
+        code: 'EVENT_NOT_FOUND',
+        message: 'Event not found',
+        path: '/events/dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9',
+      });
+    });
+
+    it('rejects empty event updates', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Empty Update Organizer',
+        email: 'empty-update-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .put(`/events/${createdEvent.id}`)
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({})
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        statusCode: 400,
+        code: 'EVENT_UPDATE_EMPTY',
+        message: 'At least one editable event field must be provided',
+        path: `/events/${createdEvent.id}`,
+      });
+    });
+
+    it('rejects immutable fields on event update', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Immutable Update Organizer',
+        email: 'immutable-update-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .put(`/events/${createdEvent.id}`)
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({
+          title: 'Immutable Update',
+          id: 'dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9',
+          organizerId: 'dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9',
+          participantIds: ['dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9'],
+          createdAt: futureIsoDate(),
+          updatedAt: futureIsoDate(),
+        })
+        .expect(400);
+
+      const body = response.body as ErrorResponseBody;
+
+      expect(body.message).toEqual(
+        expect.arrayContaining([
+          'property id should not exist',
+          'property organizerId should not exist',
+          'property participantIds should not exist',
+          'property createdAt should not exist',
+          'property updatedAt should not exist',
+        ]),
+      );
+    });
+
+    it('rejects past event schedules on update', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Past Update Organizer',
+        email: 'past-update-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .put(`/events/${createdEvent.id}`)
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({
+          scheduledAt: new Date(Date.now() - 60 * 1000).toISOString(),
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        statusCode: 400,
+        code: 'EVENT_SCHEDULE_MUST_BE_FUTURE',
+        message: 'Event must be scheduled in the future',
+        path: `/events/${createdEvent.id}`,
+      });
+    });
+
+    it('allows the event owner to delete an event', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Delete Organizer',
+        email: 'delete-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      await request(app.getHttpServer())
+        .delete(`/events/${createdEvent.id}`)
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .expect(204)
+        .expect('');
+
+      await request(app.getHttpServer())
+        .get(`/events/${createdEvent.id}`)
+        .expect(404);
+    });
+
+    it('rejects event deletion from a non-owner organizer', async () => {
+      const ownerToken = await registerAndLogin({
+        name: 'Delete Owner',
+        email: 'delete-owner@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const otherOrganizerToken = await registerAndLogin({
+        name: 'Delete Other',
+        email: 'delete-other@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(ownerToken);
+
+      const response = await request(app.getHttpServer())
+        .delete(`/events/${createdEvent.id}`)
+        .set('Authorization', `Bearer ${otherOrganizerToken}`)
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'EVENT_OWNER_REQUIRED',
+        path: `/events/${createdEvent.id}`,
+      });
+    });
+
+    it('returns 404 when deleting a missing event', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Missing Delete Organizer',
+        email: 'missing-delete-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+
+      const response = await request(app.getHttpServer())
+        .delete('/events/dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9')
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .expect(404);
+
+      expect(response.body).toMatchObject({
+        statusCode: 404,
+        code: 'EVENT_NOT_FOUND',
+        path: '/events/dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9',
+      });
+    });
   });
 
   async function registerAndLogin(input: {
@@ -718,8 +976,8 @@ describe('AppController (e2e)', () => {
     return response.body as EventResponseBody;
   }
 
-  function futureIsoDate(): string {
-    return new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  function futureIsoDate(hoursFromNow = 1): string {
+    return new Date(Date.now() + hoursFromNow * 60 * 60 * 1000).toISOString();
   }
 
   afterEach(async () => {
