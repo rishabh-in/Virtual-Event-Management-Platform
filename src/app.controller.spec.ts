@@ -15,8 +15,20 @@ describe('AppController', () => {
   });
 
   describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
+    it('returns the API root message', () => {
+      expect(appController.getRoot()).toBe(
+        'Virtual Event Management Platform API',
+      );
+    });
+  });
+
+  describe('health', () => {
+    it('returns a healthy application response', () => {
+      expect(appController.getHealth()).toEqual({
+        status: 'ok',
+        service: 'virtual-event-management-platform',
+        timestamp: expect.any(String) as string,
+      });
     });
   });
 });

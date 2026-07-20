@@ -3,6 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { configureApp } from './../src/app.setup';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
@@ -13,14 +14,36 @@ describe('AppController (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    configureApp(app);
     await app.init();
   });
 
-  it('/ (GET)', () => {
+  it('/health (GET)', () => {
     return request(app.getHttpServer())
-      .get('/')
+      .get('/health')
       .expect(200)
-      .expect('Hello World!');
+      .expect(({ body }: { body: Record<string, unknown> }) => {
+        expect(body).toEqual({
+          status: 'ok',
+          service: 'virtual-event-management-platform',
+          timestamp: expect.any(String) as string,
+        });
+      });
+  });
+
+  it('returns consistent error responses', () => {
+    return request(app.getHttpServer())
+      .get('/missing-route')
+      .expect(404)
+      .expect(({ body }: { body: Record<string, unknown> }) => {
+        expect(body).toEqual({
+          statusCode: 404,
+          code: 'NOT_FOUND',
+          message: 'Cannot GET /missing-route',
+          path: '/missing-route',
+          timestamp: expect.any(String) as string,
+        });
+      });
   });
 
   afterEach(async () => {
