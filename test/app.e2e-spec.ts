@@ -4,7 +4,9 @@ import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { CurrentUser } from './../src/auth/decorators/current-user.decorator';
+import { Roles } from './../src/auth/decorators/roles.decorator';
 import { JwtAuthGuard } from './../src/auth/guards/jwt-auth.guard';
+import { RolesGuard } from './../src/auth/guards/roles.guard';
 import { AuthenticatedUser } from './../src/auth/interfaces/authenticated-user.interface';
 import { UserRole } from './../src/common/enums/user-role.enum';
 import { AppModule } from './../src/app.module';
@@ -46,6 +48,20 @@ class AuthProbeController {
     @CurrentUser() user: AuthenticatedUser,
   ): AuthenticatedUser {
     return user;
+  }
+
+  @Get('organizer')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER)
+  getOrganizerOnly(): { status: 'ok' } {
+    return { status: 'ok' };
+  }
+
+  @Get('attendee')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ATTENDEE)
+  getAttendeeOnly(): { status: 'ok' } {
+    return { status: 'ok' };
   }
 }
 
@@ -339,6 +355,114 @@ describe('AppController (e2e)', () => {
       });
     });
   });
+
+  describe('role-based authorization', () => {
+    it('allows an organizer to access organizer-only resources', async () => {
+      const accessToken = await registerAndLogin({
+        name: 'Organizer User',
+        email: 'organizer-role@example.com',
+        role: UserRole.ORGANIZER,
+      });
+
+      await request(app.getHttpServer())
+        .get('/auth-probe/organizer')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200)
+        .expect({ status: 'ok' });
+    });
+
+    it('allows an attendee to access attendee-only resources', async () => {
+      const accessToken = await registerAndLogin({
+        name: 'Attendee User',
+        email: 'attendee-role@example.com',
+        role: UserRole.ATTENDEE,
+      });
+
+      await request(app.getHttpServer())
+        .get('/auth-probe/attendee')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200)
+        .expect({ status: 'ok' });
+    });
+
+    it('rejects an attendee from organizer-only resources', async () => {
+      const accessToken = await registerAndLogin({
+        name: 'Blocked Attendee',
+        email: 'blocked-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+
+      const response = await request(app.getHttpServer())
+        .get('/auth-probe/organizer')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'FORBIDDEN_ROLE',
+        message: 'You do not have permission to access this resource',
+        path: '/auth-probe/organizer',
+      });
+    });
+
+    it('rejects an organizer from attendee-only resources', async () => {
+      const accessToken = await registerAndLogin({
+        name: 'Blocked Organizer',
+        email: 'blocked-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+
+      const response = await request(app.getHttpServer())
+        .get('/auth-probe/attendee')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'FORBIDDEN_ROLE',
+        message: 'You do not have permission to access this resource',
+        path: '/auth-probe/attendee',
+      });
+    });
+
+    it('rejects unauthenticated role-protected requests with 401', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/auth-probe/organizer')
+        .expect(401);
+
+      expect(response.body).toMatchObject({
+        statusCode: 401,
+        code: 'UNAUTHORIZED',
+        message: 'Unauthorized',
+        path: '/auth-probe/organizer',
+      });
+    });
+  });
+
+  async function registerAndLogin(input: {
+    name: string;
+    email: string;
+    role: UserRole;
+  }): Promise<string> {
+    await request(app.getHttpServer()).post('/register').send({
+      name: input.name,
+      email: input.email,
+      password: 'Password123!',
+      role: input.role,
+    });
+
+    const loginResponse = await request(app.getHttpServer())
+      .post('/login')
+      .send({
+        email: input.email,
+        password: 'Password123!',
+      })
+      .expect(200);
+
+    const loginBody = loginResponse.body as LoginResponseBody;
+
+    return loginBody.accessToken;
+  }
 
   afterEach(async () => {
     await app.close();
