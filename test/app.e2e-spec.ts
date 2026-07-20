@@ -11,6 +11,7 @@ import { AuthenticatedUser } from './../src/auth/interfaces/authenticated-user.i
 import { UserRole } from './../src/common/enums/user-role.enum';
 import { AppModule } from './../src/app.module';
 import { configureApp } from './../src/app.setup';
+import type { Event } from './../src/events/domain/event';
 import { InMemoryEventRepository } from './../src/events/repositories/in-memory-event.repository';
 import { EVENT_REPOSITORY } from './../src/events/repositories/event.repository.interface';
 import { InMemoryUserRepository } from './../src/users/repositories/in-memory-user.repository';
@@ -43,6 +44,11 @@ interface EventResponseBody {
   participantCount: number;
   createdAt: string;
   updatedAt: string;
+}
+
+interface EventRegistrationResponseBody {
+  message: string;
+  event: EventResponseBody;
 }
 
 interface ErrorResponseBody {
@@ -937,11 +943,179 @@ describe('AppController (e2e)', () => {
     });
   });
 
+  describe('event registrations', () => {
+    it('allows an attendee to register for a future event', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Registration Organizer',
+        email: 'registration-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeToken = await registerAndLogin({
+        name: 'Registration Attendee',
+        email: 'registration-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(201);
+
+      const body = response.body as EventRegistrationResponseBody;
+
+      expect(body).toMatchObject({
+        message: 'Event registration successful',
+        event: {
+          id: createdEvent.id,
+          participantCount: 1,
+        },
+      });
+
+      await request(app.getHttpServer())
+        .get(`/events/${createdEvent.id}`)
+        .expect(200)
+        .expect(({ body: eventBody }: { body: EventResponseBody }) => {
+          expect(eventBody.participantCount).toBe(1);
+          expect(eventBody).not.toHaveProperty('participantIds');
+        });
+    });
+
+    it('rejects duplicate event registration', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Duplicate Registration Organizer',
+        email: 'duplicate-registration-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeToken = await registerAndLogin({
+        name: 'Duplicate Registration Attendee',
+        email: 'duplicate-registration-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(201);
+
+      const response = await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(409);
+
+      expect(response.body).toMatchObject({
+        statusCode: 409,
+        code: 'EVENT_ALREADY_REGISTERED',
+        message: 'You are already registered for this event',
+        path: `/events/${createdEvent.id}/register`,
+      });
+    });
+
+    it('rejects organizer use of the attendee registration endpoint', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Blocked Registration Organizer',
+        email: 'blocked-registration-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'FORBIDDEN_ROLE',
+        path: `/events/${createdEvent.id}/register`,
+      });
+    });
+
+    it('returns 404 when registering for a missing event', async () => {
+      const attendeeToken = await registerAndLogin({
+        name: 'Missing Registration Attendee',
+        email: 'missing-registration-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/events/dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9/register')
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(404);
+
+      expect(response.body).toMatchObject({
+        statusCode: 404,
+        code: 'EVENT_NOT_FOUND',
+        message: 'Event not found',
+        path: '/events/dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9/register',
+      });
+    });
+
+    it('rejects registration for an event that has started or passed', async () => {
+      const attendeeToken = await registerAndLogin({
+        name: 'Past Registration Attendee',
+        email: 'past-registration-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const pastEvent = await eventRepository.create(createPastEvent());
+
+      const response = await request(app.getHttpServer())
+        .post(`/events/${pastEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        statusCode: 400,
+        code: 'EVENT_REGISTRATION_CLOSED',
+        message:
+          'Registration is closed for events that have started or passed',
+        path: `/events/${pastEvent.id}/register`,
+      });
+    });
+
+    it('ignores client-supplied attendee IDs and uses the authenticated user', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Body Ignored Organizer',
+        email: 'body-ignored-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeLogin = await registerAndLoginWithUser({
+        name: 'Body Ignored Attendee',
+        email: 'body-ignored-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeLogin.accessToken}`)
+        .send({
+          attendeeId: 'dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9',
+        })
+        .expect(201);
+
+      const storedEvent = await eventRepository.findById(createdEvent.id);
+
+      expect(storedEvent?.participantIds).toEqual([attendeeLogin.user.id]);
+    });
+  });
+
   async function registerAndLogin(input: {
     name: string;
     email: string;
     role: UserRole;
   }): Promise<string> {
+    const loginBody = await registerAndLoginWithUser(input);
+
+    return loginBody.accessToken;
+  }
+
+  async function registerAndLoginWithUser(input: {
+    name: string;
+    email: string;
+    role: UserRole;
+  }): Promise<LoginResponseBody> {
     await request(app.getHttpServer()).post('/register').send({
       name: input.name,
       email: input.email,
@@ -959,7 +1133,7 @@ describe('AppController (e2e)', () => {
 
     const loginBody = loginResponse.body as LoginResponseBody;
 
-    return loginBody.accessToken;
+    return loginBody;
   }
 
   async function createEvent(accessToken: string): Promise<EventResponseBody> {
@@ -978,6 +1152,21 @@ describe('AppController (e2e)', () => {
 
   function futureIsoDate(hoursFromNow = 1): string {
     return new Date(Date.now() + hoursFromNow * 60 * 60 * 1000).toISOString();
+  }
+
+  function createPastEvent(): Event {
+    const now = new Date();
+
+    return {
+      id: 'aab44ad4-6faa-4087-a6d7-ac046067d8fe',
+      title: 'Past Event',
+      description: 'A past event seeded for registration tests',
+      scheduledAt: new Date(Date.now() - 60 * 1000),
+      organizerId: 'organizer-id',
+      participantIds: [],
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
   afterEach(async () => {

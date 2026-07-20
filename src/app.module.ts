@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { configuration } from './config/configuration';
 import { validateEnvironment } from './config/env.validation';
 import { EventsModule } from './events/events.module';
+import { RegistrationsModule } from './registrations/registrations.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -17,6 +18,7 @@ import { UsersModule } from './users/users.module';
     }),
     AuthModule,
     EventsModule,
+    RegistrationsModule,
     UsersModule,
   ],
   controllers: [AppController],

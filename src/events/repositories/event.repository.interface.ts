@@ -2,7 +2,23 @@ import type { Event } from '../domain/event';
 
 export const EVENT_REPOSITORY = Symbol('EVENT_REPOSITORY');
 
+export type AddEventParticipantResult =
+  | {
+      status: 'registered';
+      event: Event;
+    }
+  | {
+      status: 'event_not_found';
+    }
+  | {
+      status: 'duplicate_participant';
+    };
+
 export interface EventRepository {
+  addParticipant(
+    eventId: string,
+    participantId: string,
+  ): Promise<AddEventParticipantResult>;
   create(event: Event): Promise<Event>;
   delete(id: string): Promise<void>;
   findAll(): Promise<Event[]>;

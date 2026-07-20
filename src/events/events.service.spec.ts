@@ -28,6 +28,7 @@ describe('EventsService', () => {
   beforeEach(() => {
     events = [];
     repository = {
+      addParticipant: jest.fn(),
       create: jest.fn((event: Event) => {
         events.push(event);
         return Promise.resolve(cloneEvent(event));
