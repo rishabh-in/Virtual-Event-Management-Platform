@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { UsersModule } from '../users/users.module';
 import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
 import { InMemoryEventRepository } from './repositories/in-memory-event.repository';
 import { EVENT_REPOSITORY } from './repositories/event.repository.interface';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, UsersModule],
   controllers: [EventsController],
   providers: [
     EventsService,

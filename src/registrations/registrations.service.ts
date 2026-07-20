@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { toEventResponse } from '../events/dto/event-response.dto';
+import type { EventResponseDto } from '../events/dto/event-response.dto';
 import { EVENT_REPOSITORY } from '../events/repositories/event.repository.interface';
 import type { EventRepository } from '../events/repositories/event.repository.interface';
 import type { EventRegistrationResponseDto } from './dto/event-registration-response.dto';
@@ -61,5 +62,32 @@ export class RegistrationsService {
       message: 'Event registration successful',
       event: toEventResponse(result.event),
     };
+  }
+
+  async findRegisteredEvents(attendeeId: string): Promise<EventResponseDto[]> {
+    const events = await this.eventRepository.findByParticipantId(attendeeId);
+
+    return events.map((event) => toEventResponse(event));
+  }
+
+  async cancelRegistration(eventId: string, attendeeId: string): Promise<void> {
+    const result = await this.eventRepository.removeParticipant(
+      eventId,
+      attendeeId,
+    );
+
+    if (result.status === 'event_not_found') {
+      throw new NotFoundException({
+        code: 'EVENT_NOT_FOUND',
+        message: 'Event not found',
+      });
+    }
+
+    if (result.status === 'participant_not_found') {
+      throw new NotFoundException({
+        code: 'REGISTRATION_NOT_FOUND',
+        message: 'You are not registered for this event',
+      });
+    }
   }
 }

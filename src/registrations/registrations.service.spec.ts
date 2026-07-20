@@ -27,6 +27,39 @@ describe('RegistrationsService', () => {
       findById: jest.fn((id: string) =>
         Promise.resolve(id === event.id ? cloneEvent(event) : null),
       ),
+      findByParticipantId: jest.fn((participantId: string) =>
+        Promise.resolve(
+          event.participantIds.includes(participantId)
+            ? [cloneEvent(event)]
+            : [],
+        ),
+      ),
+      removeParticipant: jest.fn((eventId: string, participantId: string) => {
+        if (eventId !== event.id) {
+          return Promise.resolve({
+            status: 'event_not_found',
+          });
+        }
+
+        if (!event.participantIds.includes(participantId)) {
+          return Promise.resolve({
+            status: 'participant_not_found',
+          });
+        }
+
+        event = {
+          ...event,
+          participantIds: event.participantIds.filter(
+            (id) => id !== participantId,
+          ),
+          updatedAt: new Date(),
+        };
+
+        return Promise.resolve({
+          status: 'removed',
+          event: cloneEvent(event),
+        });
+      }),
       update: jest.fn(),
     };
 
@@ -75,6 +108,31 @@ describe('RegistrationsService', () => {
       service.registerForEvent(event.id, 'attendee-id'),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(repository.addParticipant.mock.calls).toHaveLength(0);
+  });
+
+  it('returns events registered by an attendee', async () => {
+    await service.registerForEvent(event.id, 'attendee-id');
+
+    await expect(service.findRegisteredEvents('attendee-id')).resolves.toEqual([
+      expect.objectContaining({
+        id: event.id,
+        participantCount: 1,
+      }),
+    ]);
+  });
+
+  it('cancels an existing registration', async () => {
+    await service.registerForEvent(event.id, 'attendee-id');
+
+    await service.cancelRegistration(event.id, 'attendee-id');
+
+    expect(event.participantIds).toEqual([]);
+  });
+
+  it('throws not found when cancelling a missing registration', async () => {
+    await expect(
+      service.cancelRegistration(event.id, 'attendee-id'),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   function addParticipant(

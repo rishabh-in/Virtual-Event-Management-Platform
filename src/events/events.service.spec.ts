@@ -7,11 +7,16 @@ import type { Event } from './domain/event';
 import type { CreateEventDto } from './dto/create-event.dto';
 import type { EventRepository } from './repositories/event.repository.interface';
 import { EventsService } from './events.service';
+import { UserRole } from '../common/enums/user-role.enum';
+import type { User } from '../users/domain/user';
+import type { UsersService } from '../users/users.service';
 
 describe('EventsService', () => {
   let events: Event[];
   let repository: jest.Mocked<EventRepository>;
   let service: EventsService;
+  let users: User[];
+  let usersService: jest.Mocked<Pick<UsersService, 'findByIds'>>;
 
   const futureDate = (): string =>
     new Date(Date.now() + 60 * 60 * 1000).toISOString();
@@ -27,6 +32,7 @@ describe('EventsService', () => {
 
   beforeEach(() => {
     events = [];
+    users = [];
     repository = {
       addParticipant: jest.fn(),
       create: jest.fn((event: Event) => {
@@ -41,6 +47,8 @@ describe('EventsService', () => {
       findById: jest.fn((id: string) =>
         Promise.resolve(events.find((event) => event.id === id) ?? null),
       ),
+      findByParticipantId: jest.fn(),
+      removeParticipant: jest.fn(),
       update: jest.fn((event: Event) => {
         events = events.map((storedEvent) =>
           storedEvent.id === event.id ? event : storedEvent,
@@ -49,7 +57,13 @@ describe('EventsService', () => {
       }),
     };
 
-    service = new EventsService(repository);
+    usersService = {
+      findByIds: jest.fn((ids: string[]) =>
+        Promise.resolve(users.filter((user) => ids.includes(user.id))),
+      ),
+    };
+
+    service = new EventsService(repository, usersService as UsersService);
   });
 
   it('creates an event owned by the authenticated organizer', async () => {
@@ -181,6 +195,46 @@ describe('EventsService', () => {
 
     await expect(
       service.deleteEvent(created.id, 'other-organizer-id'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('returns safe participant details for the event owner', async () => {
+    const created = await service.createEvent(createDto(), 'organizer-id');
+    users = [
+      {
+        id: 'attendee-id',
+        name: 'Attendee User',
+        email: 'attendee@example.com',
+        passwordHash: 'hashed-password',
+        role: UserRole.ATTENDEE,
+        createdAt: new Date(),
+      },
+    ];
+    events = events.map((event) =>
+      event.id === created.id
+        ? {
+            ...event,
+            participantIds: ['attendee-id'],
+          }
+        : event,
+    );
+
+    await expect(
+      service.findParticipants(created.id, 'organizer-id'),
+    ).resolves.toEqual([
+      {
+        id: 'attendee-id',
+        name: 'Attendee User',
+        email: 'attendee@example.com',
+      },
+    ]);
+  });
+
+  it('rejects participant access from a non-owner organizer', async () => {
+    const created = await service.createEvent(createDto(), 'organizer-id');
+
+    await expect(
+      service.findParticipants(created.id, 'other-organizer-id'),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

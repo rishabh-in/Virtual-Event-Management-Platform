@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Event } from '../domain/event';
 import type { AddEventParticipantResult } from './event.repository.interface';
+import type { RemoveEventParticipantResult } from './event.repository.interface';
 import type { EventRepository } from './event.repository.interface';
 
 @Injectable()
@@ -65,6 +66,46 @@ export class InMemoryEventRepository implements EventRepository {
     const event = this.eventsById.get(id);
 
     return Promise.resolve(event ? this.cloneEvent(event) : null);
+  }
+
+  findByParticipantId(participantId: string): Promise<Event[]> {
+    return Promise.resolve(
+      Array.from(this.eventsById.values())
+        .filter((event) => event.participantIds.includes(participantId))
+        .map((event) => this.cloneEvent(event)),
+    );
+  }
+
+  removeParticipant(
+    eventId: string,
+    participantId: string,
+  ): Promise<RemoveEventParticipantResult> {
+    const event = this.eventsById.get(eventId);
+
+    if (!event) {
+      return Promise.resolve({
+        status: 'event_not_found',
+      });
+    }
+
+    if (!event.participantIds.includes(participantId)) {
+      return Promise.resolve({
+        status: 'participant_not_found',
+      });
+    }
+
+    const updatedEvent = this.cloneEvent({
+      ...event,
+      participantIds: event.participantIds.filter((id) => id !== participantId),
+      updatedAt: new Date(),
+    });
+
+    this.eventsById.set(eventId, updatedEvent);
+
+    return Promise.resolve({
+      status: 'removed',
+      event: this.cloneEvent(updatedEvent),
+    });
   }
 
   update(event: Event): Promise<Event> {

@@ -40,6 +40,9 @@ describe('UsersService', () => {
       findById: jest.fn((id: string) => {
         return Promise.resolve(users.find((user) => user.id === id) ?? null);
       }),
+      findByIds: jest.fn((ids: string[]) => {
+        return Promise.resolve(users.filter((user) => ids.includes(user.id)));
+      }),
     };
 
     const configService = {

@@ -14,6 +14,18 @@ export type AddEventParticipantResult =
       status: 'duplicate_participant';
     };
 
+export type RemoveEventParticipantResult =
+  | {
+      status: 'removed';
+      event: Event;
+    }
+  | {
+      status: 'event_not_found';
+    }
+  | {
+      status: 'participant_not_found';
+    };
+
 export interface EventRepository {
   addParticipant(
     eventId: string,
@@ -23,5 +35,10 @@ export interface EventRepository {
   delete(id: string): Promise<void>;
   findAll(): Promise<Event[]>;
   findById(id: string): Promise<Event | null>;
+  findByParticipantId(participantId: string): Promise<Event[]>;
+  removeParticipant(
+    eventId: string,
+    participantId: string,
+  ): Promise<RemoveEventParticipantResult>;
   update(event: Event): Promise<Event>;
 }

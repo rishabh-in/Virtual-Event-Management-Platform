@@ -1099,6 +1099,195 @@ describe('AppController (e2e)', () => {
 
       expect(storedEvent?.participantIds).toEqual([attendeeLogin.user.id]);
     });
+
+    it('allows an attendee to view their registered events', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'My Events Organizer',
+        email: 'my-events-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeToken = await registerAndLogin({
+        name: 'My Events Attendee',
+        email: 'my-events-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(201);
+
+      const response = await request(app.getHttpServer())
+        .get('/me/events')
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(200);
+
+      const body = response.body as EventResponseBody[];
+
+      expect(body).toEqual([
+        {
+          ...createdEvent,
+          participantCount: 1,
+          updatedAt: expect.any(String) as string,
+        },
+      ]);
+      expect(body[0]).not.toHaveProperty('participantIds');
+    });
+
+    it('allows an attendee to cancel registration', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Cancel Organizer',
+        email: 'cancel-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeToken = await registerAndLogin({
+        name: 'Cancel Attendee',
+        email: 'cancel-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .delete(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(204)
+        .expect('');
+
+      await request(app.getHttpServer())
+        .get('/me/events')
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(200)
+        .expect([]);
+
+      await request(app.getHttpServer())
+        .get(`/events/${createdEvent.id}`)
+        .expect(200)
+        .expect(({ body }: { body: EventResponseBody }) => {
+          expect(body.participantCount).toBe(0);
+        });
+    });
+
+    it('rejects cancellation when the attendee is not registered', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Unregistered Organizer',
+        email: 'unregistered-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeToken = await registerAndLogin({
+        name: 'Unregistered Attendee',
+        email: 'unregistered-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .delete(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(404);
+
+      expect(response.body).toMatchObject({
+        statusCode: 404,
+        code: 'REGISTRATION_NOT_FOUND',
+        message: 'You are not registered for this event',
+        path: `/events/${createdEvent.id}/register`,
+      });
+    });
+
+    it('allows the event owner to view safe participant details', async () => {
+      const organizerLogin = await registerAndLoginWithUser({
+        name: 'Participants Organizer',
+        email: 'participants-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeLogin = await registerAndLoginWithUser({
+        name: 'Participant Attendee',
+        email: 'participant-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerLogin.accessToken);
+
+      await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeLogin.accessToken}`)
+        .expect(201);
+
+      const response = await request(app.getHttpServer())
+        .get(`/events/${createdEvent.id}/participants`)
+        .set('Authorization', `Bearer ${organizerLogin.accessToken}`)
+        .expect(200);
+
+      const body = response.body as Array<{
+        id: string;
+        name: string;
+        email: string;
+      }>;
+
+      expect(body).toEqual([
+        {
+          id: attendeeLogin.user.id,
+          name: 'Participant Attendee',
+          email: 'participant-attendee@example.com',
+        },
+      ]);
+      expect(body[0]).not.toHaveProperty('passwordHash');
+    });
+
+    it('rejects participant access from another organizer', async () => {
+      const ownerToken = await registerAndLogin({
+        name: 'Participants Owner',
+        email: 'participants-owner@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const otherOrganizerToken = await registerAndLogin({
+        name: 'Participants Other',
+        email: 'participants-other@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(ownerToken);
+
+      const response = await request(app.getHttpServer())
+        .get(`/events/${createdEvent.id}/participants`)
+        .set('Authorization', `Bearer ${otherOrganizerToken}`)
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'EVENT_OWNER_REQUIRED',
+        message: 'Only the event organizer can modify this event',
+        path: `/events/${createdEvent.id}/participants`,
+      });
+    });
+
+    it('rejects attendee participant access', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Participants Role Organizer',
+        email: 'participants-role-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeToken = await registerAndLogin({
+        name: 'Participants Role Attendee',
+        email: 'participants-role-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .get(`/events/${createdEvent.id}/participants`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'FORBIDDEN_ROLE',
+        path: `/events/${createdEvent.id}/participants`,
+      });
+    });
   });
 
   async function registerAndLogin(input: {

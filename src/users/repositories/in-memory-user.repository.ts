@@ -32,6 +32,15 @@ export class InMemoryUserRepository implements UserRepository {
     return Promise.resolve(user ? this.cloneUser(user) : null);
   }
 
+  findByIds(ids: string[]): Promise<User[]> {
+    const users = ids
+      .map((id) => this.usersById.get(id))
+      .filter((user): user is User => user !== undefined)
+      .map((user) => this.cloneUser(user));
+
+    return Promise.resolve(users);
+  }
+
   findByEmail(email: string): Promise<User | null> {
     const userId = this.userIdsByEmail.get(email.toLowerCase());
 

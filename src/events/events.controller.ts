@@ -18,6 +18,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { UserRole } from '../common/enums/user-role.enum';
 import { CreateEventDto } from './dto/create-event.dto';
+import type { EventParticipantResponseDto } from './dto/event-participant-response.dto';
 import type { EventResponseDto } from './dto/event-response.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
 import { EventsService } from './events.service';
@@ -36,6 +37,16 @@ export class EventsController {
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
   ): Promise<EventResponseDto> {
     return this.eventsService.findById(id);
+  }
+
+  @Get(':id/participants')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER)
+  findParticipants(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<EventParticipantResponseDto[]> {
+    return this.eventsService.findParticipants(id, user.id);
   }
 
   @Post()

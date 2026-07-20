@@ -7,18 +7,22 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { CreateEventDto } from './dto/create-event.dto';
+import { toEventParticipantResponse } from './dto/event-participant-response.dto';
+import type { EventParticipantResponseDto } from './dto/event-participant-response.dto';
 import { toEventResponse } from './dto/event-response.dto';
 import type { EventResponseDto } from './dto/event-response.dto';
 import type { UpdateEventDto } from './dto/update-event.dto';
 import type { Event } from './domain/event';
 import { EVENT_REPOSITORY } from './repositories/event.repository.interface';
 import type { EventRepository } from './repositories/event.repository.interface';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class EventsService {
   constructor(
     @Inject(EVENT_REPOSITORY)
     private readonly eventRepository: EventRepository,
+    private readonly usersService: UsersService,
   ) {}
 
   async createEvent(
@@ -94,6 +98,23 @@ export class EventsService {
     this.assertEventOwner(event, organizerId);
 
     await this.eventRepository.delete(id);
+  }
+
+  async findParticipants(
+    id: string,
+    organizerId: string,
+  ): Promise<EventParticipantResponseDto[]> {
+    const event = await this.getEventOrThrow(id);
+
+    this.assertEventOwner(event, organizerId);
+
+    const participants = await this.usersService.findByIds(
+      event.participantIds,
+    );
+
+    return participants.map((participant) =>
+      toEventParticipantResponse(participant),
+    );
   }
 
   private async getEventOrThrow(id: string): Promise<Event> {
