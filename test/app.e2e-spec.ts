@@ -11,6 +11,8 @@ import { AuthenticatedUser } from './../src/auth/interfaces/authenticated-user.i
 import { UserRole } from './../src/common/enums/user-role.enum';
 import { AppModule } from './../src/app.module';
 import { configureApp } from './../src/app.setup';
+import { InMemoryEventRepository } from './../src/events/repositories/in-memory-event.repository';
+import { EVENT_REPOSITORY } from './../src/events/repositories/event.repository.interface';
 import { InMemoryUserRepository } from './../src/users/repositories/in-memory-user.repository';
 import { USER_REPOSITORY } from './../src/users/repositories/user.repository.interface';
 
@@ -30,6 +32,17 @@ interface LoginResponseBody {
     email: string;
     role: UserRole;
   };
+}
+
+interface EventResponseBody {
+  id: string;
+  title: string;
+  description: string;
+  scheduledAt: string;
+  organizerId: string;
+  participantCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface ErrorResponseBody {
@@ -67,6 +80,7 @@ class AuthProbeController {
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
+  let eventRepository: InMemoryEventRepository;
   let userRepository: InMemoryUserRepository;
 
   beforeEach(async () => {
@@ -79,7 +93,9 @@ describe('AppController (e2e)', () => {
     configureApp(app);
     await app.init();
 
+    eventRepository = app.get<InMemoryEventRepository>(EVENT_REPOSITORY);
     userRepository = app.get<InMemoryUserRepository>(USER_REPOSITORY);
+    eventRepository.clear();
     userRepository.clear();
   });
 
@@ -439,6 +455,230 @@ describe('AppController (e2e)', () => {
     });
   });
 
+  describe('events', () => {
+    it('allows an organizer to create an event', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Event Organizer',
+        email: 'event-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const scheduledAt = futureIsoDate();
+
+      const response = await request(app.getHttpServer())
+        .post('/events')
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({
+          title: 'NestJS Summit',
+          description: 'A virtual event about NestJS',
+          scheduledAt,
+        })
+        .expect(201);
+
+      const body = response.body as EventResponseBody;
+
+      expect(body).toEqual({
+        id: expect.any(String) as string,
+        title: 'NestJS Summit',
+        description: 'A virtual event about NestJS',
+        scheduledAt,
+        organizerId: expect.any(String) as string,
+        participantCount: 0,
+        createdAt: expect.any(String) as string,
+        updatedAt: expect.any(String) as string,
+      });
+      expect(body).not.toHaveProperty('participantIds');
+    });
+
+    it('lists events publicly without participant IDs', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Public Organizer',
+        email: 'public-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .get('/events')
+        .expect(200);
+
+      const body = response.body as EventResponseBody[];
+
+      expect(body).toEqual([createdEvent]);
+      expect(body[0]).not.toHaveProperty('participantIds');
+    });
+
+    it('retrieves an event by ID publicly', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Lookup Organizer',
+        email: 'lookup-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .get(`/events/${createdEvent.id}`)
+        .expect(200);
+
+      expect(response.body).toEqual(createdEvent);
+    });
+
+    it('returns 404 when an event does not exist', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/events/dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9')
+        .expect(404);
+
+      expect(response.body).toMatchObject({
+        statusCode: 404,
+        code: 'EVENT_NOT_FOUND',
+        message: 'Event not found',
+        path: '/events/dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9',
+      });
+    });
+
+    it('rejects invalid event IDs', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/events/not-a-uuid')
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        statusCode: 400,
+        code: 'BAD_REQUEST',
+        path: '/events/not-a-uuid',
+      });
+    });
+
+    it('rejects unauthenticated event creation', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/events')
+        .send({
+          title: 'Private Event',
+          description: 'Should require auth',
+          scheduledAt: futureIsoDate(),
+        })
+        .expect(401);
+
+      expect(response.body).toMatchObject({
+        statusCode: 401,
+        code: 'UNAUTHORIZED',
+        path: '/events',
+      });
+    });
+
+    it('rejects attendee event creation', async () => {
+      const attendeeToken = await registerAndLogin({
+        name: 'Event Attendee',
+        email: 'event-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/events')
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .send({
+          title: 'Attendee Event',
+          description: 'Attendees cannot create events',
+          scheduledAt: futureIsoDate(),
+        })
+        .expect(403);
+
+      expect(response.body).toMatchObject({
+        statusCode: 403,
+        code: 'FORBIDDEN_ROLE',
+        path: '/events',
+      });
+    });
+
+    it('rejects invalid event payloads and unknown properties', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Invalid Organizer',
+        email: 'invalid-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/events')
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({
+          title: '',
+          description: '',
+          scheduledAt: 'not-a-date',
+          extra: true,
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        statusCode: 400,
+        code: 'VALIDATION_ERROR',
+        path: '/events',
+      });
+
+      const body = response.body as ErrorResponseBody;
+
+      expect(body.message).toEqual(
+        expect.arrayContaining([
+          'property extra should not exist',
+          'title must be longer than or equal to 1 characters',
+          'description must be longer than or equal to 1 characters',
+          'scheduledAt must be a valid ISO 8601 date string',
+        ]),
+      );
+    });
+
+    it('rejects past events', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Past Organizer',
+        email: 'past-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/events')
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({
+          title: 'Past Event',
+          description: 'This already happened',
+          scheduledAt: new Date(Date.now() - 60 * 1000).toISOString(),
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        statusCode: 400,
+        code: 'EVENT_SCHEDULE_MUST_BE_FUTURE',
+        message: 'Event must be scheduled in the future',
+        path: '/events',
+      });
+    });
+
+    it('rejects client-supplied organizer and participant fields', async () => {
+      const organizerToken = await registerAndLogin({
+        name: 'Immutable Organizer',
+        email: 'immutable-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/events')
+        .set('Authorization', `Bearer ${organizerToken}`)
+        .send({
+          title: 'Immutable Event',
+          description: 'Clients cannot provide internal fields',
+          scheduledAt: futureIsoDate(),
+          organizerId: 'dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9',
+          participantIds: ['dce1b31a-6f02-4c68-9ce6-a2de6ec93aa9'],
+        })
+        .expect(400);
+
+      const body = response.body as ErrorResponseBody;
+
+      expect(body.message).toEqual(
+        expect.arrayContaining([
+          'property organizerId should not exist',
+          'property participantIds should not exist',
+        ]),
+      );
+    });
+  });
+
   async function registerAndLogin(input: {
     name: string;
     email: string;
@@ -462,6 +702,24 @@ describe('AppController (e2e)', () => {
     const loginBody = loginResponse.body as LoginResponseBody;
 
     return loginBody.accessToken;
+  }
+
+  async function createEvent(accessToken: string): Promise<EventResponseBody> {
+    const response = await request(app.getHttpServer())
+      .post('/events')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        title: 'Created Event',
+        description: 'Created from a test helper',
+        scheduledAt: futureIsoDate(),
+      })
+      .expect(201);
+
+    return response.body as EventResponseBody;
+  }
+
+  function futureIsoDate(): string {
+    return new Date(Date.now() + 60 * 60 * 1000).toISOString();
   }
 
   afterEach(async () => {

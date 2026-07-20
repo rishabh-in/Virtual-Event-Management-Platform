@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { configuration } from './config/configuration';
 import { validateEnvironment } from './config/env.validation';
+import { EventsModule } from './events/events.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -15,6 +16,7 @@ import { UsersModule } from './users/users.module';
       validate: validateEnvironment,
     }),
     AuthModule,
+    EventsModule,
     UsersModule,
   ],
   controllers: [AppController],
