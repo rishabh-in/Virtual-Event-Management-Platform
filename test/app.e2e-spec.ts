@@ -1,5 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Controller, Get, INestApplication, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  INestApplication,
+  Logger,
+  UseGuards,
+} from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -11,6 +17,8 @@ import { AuthenticatedUser } from './../src/auth/interfaces/authenticated-user.i
 import { UserRole } from './../src/common/enums/user-role.enum';
 import { AppModule } from './../src/app.module';
 import { configureApp } from './../src/app.setup';
+import { EMAIL_SERVICE } from './../src/email/email.interface';
+import type { EmailService } from './../src/email/email.interface';
 import type { Event } from './../src/events/domain/event';
 import { InMemoryEventRepository } from './../src/events/repositories/in-memory-event.repository';
 import { EVENT_REPOSITORY } from './../src/events/repositories/event.repository.interface';
@@ -48,6 +56,7 @@ interface EventResponseBody {
 
 interface EventRegistrationResponseBody {
   message: string;
+  emailNotificationSent: boolean;
   event: EventResponseBody;
 }
 
@@ -86,14 +95,23 @@ class AuthProbeController {
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
+  let emailServiceMock: jest.Mocked<EmailService>;
   let eventRepository: InMemoryEventRepository;
   let userRepository: InMemoryUserRepository;
 
   beforeEach(async () => {
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    emailServiceMock = {
+      sendEventRegistrationConfirmation: jest.fn(() => Promise.resolve()),
+    };
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
       controllers: [AuthProbeController],
-    }).compile();
+    })
+      .overrideProvider(EMAIL_SERVICE)
+      .useValue(emailServiceMock)
+      .compile();
 
     app = moduleFixture.createNestApplication();
     configureApp(app);
@@ -966,6 +984,60 @@ describe('AppController (e2e)', () => {
 
       expect(body).toMatchObject({
         message: 'Event registration successful',
+        emailNotificationSent: true,
+        event: {
+          id: createdEvent.id,
+          participantCount: 1,
+        },
+      });
+      expect(
+        emailServiceMock.sendEventRegistrationConfirmation.mock.calls,
+      ).toEqual([
+        [
+          {
+            attendeeEmail: 'registration-attendee@example.com',
+            attendeeName: 'Registration Attendee',
+            eventTitle: createdEvent.title,
+            scheduledAt: expect.any(Date) as Date,
+          },
+        ],
+      ]);
+
+      await request(app.getHttpServer())
+        .get(`/events/${createdEvent.id}`)
+        .expect(200)
+        .expect(({ body: eventBody }: { body: EventResponseBody }) => {
+          expect(eventBody.participantCount).toBe(1);
+          expect(eventBody).not.toHaveProperty('participantIds');
+        });
+    });
+
+    it('reports email failure without undoing registration', async () => {
+      emailServiceMock.sendEventRegistrationConfirmation.mockRejectedValueOnce(
+        new Error('Email service unavailable'),
+      );
+      const organizerToken = await registerAndLogin({
+        name: 'Email Failure Organizer',
+        email: 'email-failure-organizer@example.com',
+        role: UserRole.ORGANIZER,
+      });
+      const attendeeToken = await registerAndLogin({
+        name: 'Email Failure Attendee',
+        email: 'email-failure-attendee@example.com',
+        role: UserRole.ATTENDEE,
+      });
+      const createdEvent = await createEvent(organizerToken);
+
+      const response = await request(app.getHttpServer())
+        .post(`/events/${createdEvent.id}/register`)
+        .set('Authorization', `Bearer ${attendeeToken}`)
+        .expect(201);
+
+      const body = response.body as EventRegistrationResponseBody;
+
+      expect(body).toMatchObject({
+        message: 'Event registration successful',
+        emailNotificationSent: false,
         event: {
           id: createdEvent.id,
           participantCount: 1,
@@ -977,7 +1049,6 @@ describe('AppController (e2e)', () => {
         .expect(200)
         .expect(({ body: eventBody }: { body: EventResponseBody }) => {
           expect(eventBody.participantCount).toBe(1);
-          expect(eventBody).not.toHaveProperty('participantIds');
         });
     });
 
@@ -1360,5 +1431,6 @@ describe('AppController (e2e)', () => {
 
   afterEach(async () => {
     await app.close();
+    jest.restoreAllMocks();
   });
 });

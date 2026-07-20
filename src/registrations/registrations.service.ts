@@ -3,19 +3,28 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { EMAIL_SERVICE } from '../email/email.interface';
+import type { EmailService } from '../email/email.interface';
 import { toEventResponse } from '../events/dto/event-response.dto';
 import type { EventResponseDto } from '../events/dto/event-response.dto';
 import { EVENT_REPOSITORY } from '../events/repositories/event.repository.interface';
 import type { EventRepository } from '../events/repositories/event.repository.interface';
+import { UsersService } from '../users/users.service';
 import type { EventRegistrationResponseDto } from './dto/event-registration-response.dto';
 
 @Injectable()
 export class RegistrationsService {
+  private readonly logger = new Logger(RegistrationsService.name);
+
   constructor(
     @Inject(EVENT_REPOSITORY)
     private readonly eventRepository: EventRepository,
+    @Inject(EMAIL_SERVICE)
+    private readonly emailService: EmailService,
+    private readonly usersService: UsersService,
   ) {}
 
   async registerForEvent(
@@ -58,8 +67,19 @@ export class RegistrationsService {
       });
     }
 
+    const attendee = await this.usersService.findById(attendeeId);
+    const emailNotificationSent = attendee
+      ? await this.sendRegistrationConfirmation({
+          attendeeEmail: attendee.email,
+          attendeeName: attendee.name,
+          eventTitle: result.event.title,
+          scheduledAt: result.event.scheduledAt,
+        })
+      : false;
+
     return {
       message: 'Event registration successful',
+      emailNotificationSent,
       event: toEventResponse(result.event),
     };
   }
@@ -89,5 +109,32 @@ export class RegistrationsService {
         message: 'You are not registered for this event',
       });
     }
+  }
+
+  private async sendRegistrationConfirmation(input: {
+    attendeeEmail: string;
+    attendeeName: string;
+    eventTitle: string;
+    scheduledAt: Date;
+  }): Promise<boolean> {
+    try {
+      await this.emailService.sendEventRegistrationConfirmation(input);
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send registration confirmation email: ${this.getErrorMessage(
+          error,
+        )}`,
+      );
+      return false;
+    }
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return 'Unknown email delivery error';
   }
 }

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { Event } from '../events/domain/event';
@@ -8,15 +9,34 @@ import type {
   AddEventParticipantResult,
   EventRepository,
 } from '../events/repositories/event.repository.interface';
+import type { EmailService } from '../email/email.interface';
+import { UserRole } from '../common/enums/user-role.enum';
+import type { User } from '../users/domain/user';
+import type { UsersService } from '../users/users.service';
 import { RegistrationsService } from './registrations.service';
 
 describe('RegistrationsService', () => {
+  let attendee: User;
+  let emailService: jest.Mocked<EmailService>;
   let event: Event;
   let repository: jest.Mocked<EventRepository>;
   let service: RegistrationsService;
+  let usersService: jest.Mocked<Pick<UsersService, 'findById'>>;
 
   beforeEach(() => {
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    attendee = {
+      id: 'attendee-id',
+      name: 'Attendee User',
+      email: 'attendee@example.com',
+      passwordHash: 'hashed-password',
+      role: UserRole.ATTENDEE,
+      createdAt: new Date(),
+    };
     event = createEvent();
+    emailService = {
+      sendEventRegistrationConfirmation: jest.fn(() => Promise.resolve()),
+    };
     repository = {
       addParticipant: jest.fn((eventId: string, participantId: string) =>
         Promise.resolve(addParticipant(eventId, participantId)),
@@ -62,8 +82,17 @@ describe('RegistrationsService', () => {
       }),
       update: jest.fn(),
     };
+    usersService = {
+      findById: jest.fn((id: string) =>
+        Promise.resolve(id === attendee.id ? attendee : null),
+      ),
+    };
 
-    service = new RegistrationsService(repository);
+    service = new RegistrationsService(
+      repository,
+      emailService,
+      usersService as UsersService,
+    );
   });
 
   it('registers an attendee for a future event', async () => {
@@ -71,6 +100,7 @@ describe('RegistrationsService', () => {
 
     expect(response).toMatchObject({
       message: 'Event registration successful',
+      emailNotificationSent: true,
       event: {
         id: event.id,
         participantCount: 1,
@@ -80,6 +110,27 @@ describe('RegistrationsService', () => {
       event.id,
       'attendee-id',
     ]);
+    expect(emailService.sendEventRegistrationConfirmation.mock.calls).toEqual([
+      [
+        {
+          attendeeEmail: attendee.email,
+          attendeeName: attendee.name,
+          eventTitle: event.title,
+          scheduledAt: event.scheduledAt,
+        },
+      ],
+    ]);
+  });
+
+  it('reports email failure without undoing registration', async () => {
+    emailService.sendEventRegistrationConfirmation.mockRejectedValueOnce(
+      new Error('Email provider unavailable'),
+    );
+
+    const response = await service.registerForEvent(event.id, attendee.id);
+
+    expect(response.emailNotificationSent).toBe(false);
+    expect(event.participantIds).toEqual([attendee.id]);
   });
 
   it('rejects duplicate registration', async () => {
