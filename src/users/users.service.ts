@@ -62,6 +62,10 @@ export class UsersService {
     return this.userRepository.findByEmail(this.normalizeEmail(email));
   }
 
+  async findById(id: string): Promise<User | null> {
+    return this.userRepository.findById(id);
+  }
+
   private normalizeEmail(email: string): string {
     return email.trim().toLowerCase();
   }

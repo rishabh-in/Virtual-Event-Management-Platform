@@ -1,8 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
+import { Controller, Get, INestApplication, UseGuards } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { CurrentUser } from './../src/auth/decorators/current-user.decorator';
+import { JwtAuthGuard } from './../src/auth/guards/jwt-auth.guard';
+import { AuthenticatedUser } from './../src/auth/interfaces/authenticated-user.interface';
 import { UserRole } from './../src/common/enums/user-role.enum';
 import { AppModule } from './../src/app.module';
 import { configureApp } from './../src/app.setup';
@@ -17,12 +20,33 @@ interface RegisterResponseBody {
   createdAt: string;
 }
 
+interface LoginResponseBody {
+  accessToken: string;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    role: UserRole;
+  };
+}
+
 interface ErrorResponseBody {
   statusCode: number;
   code: string;
   message: string | string[];
   path: string;
   timestamp: string;
+}
+
+@Controller('auth-probe')
+class AuthProbeController {
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  getAuthenticatedUser(
+    @CurrentUser() user: AuthenticatedUser,
+  ): AuthenticatedUser {
+    return user;
+  }
 }
 
 describe('AppController (e2e)', () => {
@@ -32,6 +56,7 @@ describe('AppController (e2e)', () => {
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
+      controllers: [AuthProbeController],
     }).compile();
 
     app = moduleFixture.createNestApplication();
@@ -168,6 +193,150 @@ describe('AppController (e2e)', () => {
           'role must be one of the following values: organizer, attendee',
         ]),
       );
+    });
+  });
+
+  describe('POST /login', () => {
+    beforeEach(async () => {
+      await request(app.getHttpServer()).post('/register').send({
+        name: 'Login User',
+        email: 'login@example.com',
+        password: 'Password123!',
+        role: UserRole.ATTENDEE,
+      });
+    });
+
+    it('logs in with valid credentials', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/login')
+        .send({
+          email: 'LOGIN@example.com',
+          password: 'Password123!',
+        })
+        .expect(200);
+
+      const body = response.body as LoginResponseBody;
+
+      expect(body).toEqual({
+        accessToken: expect.any(String) as string,
+        user: {
+          id: expect.any(String) as string,
+          name: 'Login User',
+          email: 'login@example.com',
+          role: UserRole.ATTENDEE,
+        },
+      });
+      expect(body.user).not.toHaveProperty('passwordHash');
+      expect(body.accessToken).not.toContain('Password123!');
+    });
+
+    it('rejects an incorrect password', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/login')
+        .send({
+          email: 'login@example.com',
+          password: 'WrongPassword',
+        })
+        .expect(401);
+
+      expect(response.body).toMatchObject({
+        statusCode: 401,
+        code: 'INVALID_CREDENTIALS',
+        message: 'Invalid email or password',
+        path: '/login',
+      });
+    });
+
+    it('rejects an unknown email', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/login')
+        .send({
+          email: 'missing@example.com',
+          password: 'Password123!',
+        })
+        .expect(401);
+
+      expect(response.body).toMatchObject({
+        statusCode: 401,
+        code: 'INVALID_CREDENTIALS',
+        message: 'Invalid email or password',
+        path: '/login',
+      });
+    });
+
+    it('rejects invalid login input', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/login')
+        .send({
+          email: 'not-an-email',
+          password: '',
+          unexpected: true,
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        statusCode: 400,
+        code: 'VALIDATION_ERROR',
+        path: '/login',
+      });
+    });
+  });
+
+  describe('JWT authentication', () => {
+    it('allows a valid bearer token', async () => {
+      await request(app.getHttpServer()).post('/register').send({
+        name: 'Token User',
+        email: 'token@example.com',
+        password: 'Password123!',
+        role: UserRole.ORGANIZER,
+      });
+
+      const loginResponse = await request(app.getHttpServer())
+        .post('/login')
+        .send({
+          email: 'token@example.com',
+          password: 'Password123!',
+        })
+        .expect(200);
+
+      const loginBody = loginResponse.body as LoginResponseBody;
+
+      const response = await request(app.getHttpServer())
+        .get('/auth-probe')
+        .set('Authorization', `Bearer ${loginBody.accessToken}`)
+        .expect(200);
+
+      expect(response.body).toEqual({
+        id: loginBody.user.id,
+        role: UserRole.ORGANIZER,
+      });
+    });
+
+    it('rejects a missing JWT', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/auth-probe')
+        .expect(401);
+
+      expect(response.body).toMatchObject({
+        statusCode: 401,
+        code: 'UNAUTHORIZED',
+        message: 'Unauthorized',
+        path: '/auth-probe',
+      });
+    });
+
+    it('rejects an invalid JWT', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/auth-probe')
+        .set('Authorization', 'Bearer invalid.jwt.token')
+        .expect(401);
+
+      expect(response.body).toMatchObject({
+        statusCode: 401,
+        code: 'UNAUTHORIZED',
+        message: 'Unauthorized',
+        path: '/auth-probe',
+      });
     });
   });
 
